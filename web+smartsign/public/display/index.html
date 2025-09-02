@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>스마트표지판</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+
+  <style>
+    :root { --bg:#000; --fg:#fff; --panel:#f7f7f7; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; background:#fff; color:#000; }
+    #container { display:flex; flex-direction:column; height:100vh; }
+
+    /* 상단 바 */
+    #topBar {
+      position: relative; display:flex; align-items:center; justify-content:space-between;
+      padding:10px 16px; background:#111; color:#fff;
+    }
+    #pageTitle {
+      position:absolute; left:50%; top:50%; transform:translate(-50%, -50%);
+      font-weight:800;
+    }
+    #crowdBadge { margin-left:auto; padding:6px 10px; border-radius:8px; font-weight:700; }
+
+    #map { flex:3; min-height: 48vh; }
+    #sidebar { flex:2; padding:12px 18px; background: var(--panel); overflow-y:auto; }
+    #sidebar h2 { font-size:20px; margin:0 0 10px; border-bottom:2px solid #ddd; padding-bottom:4px; }
+    .event { margin-bottom:10px; font-size:15px; background:#fff; padding:10px; border-radius:8px; border:1px solid #e5e5e5; }
+
+    /* 🚮 무단투기 풀스크린 */
+    #alertView { position: fixed; inset: 0; display: none; background:#000; color:#fff;
+      align-items: center; justify-content: center; flex-direction: column; gap: 16px;
+      z-index: 9999; text-align:center; padding: 16px; }
+    #alertHeader { font-size: 28px; font-weight: 800; }
+    #alertMsg { font-size: 26px; font-weight: 700; }
+    #subMsg { font-size: 18px; opacity: 0.9; }
+    #dismissBtn { margin-top: 6px; padding: 10px 16px; font-size: 16px; font-weight: 700;
+      background: #222; color:#fff; border:1px solid #444; border-radius: 10px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div id="topBar">
+      <div style="width:1px;"></div>
+      <div id="pageTitle">📍스마트표지판</div>
+      <div id="crowdBadge">혼잡도: <span id="crowdText">-명</span></div>
+    </div>
+    <div id="map"></div>
+    <div id="sidebar">
+      <h2>📊 최근 사건 기록 (alerts)</h2>
+      <div id="eventList"></div>
+    </div>
+  </div>
+
+  <!-- 🚮 무단투기 풀스크린 -->
+  <div id="alertView">
+    <div id="alertHeader">🚮 무단투기 감지</div>
+    <div id="alertMsg">무단투기가 감지되었습니다.</div>
+    <div id="subMsg">무단투기 시 과태료가 부과됩니다.</div>
+    <button id="dismissBtn">화면 닫기</button>
+  </div>
+
+  <!-- Leaflet -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyCMX4TtnCZ9lLYYZ6otP8d_su_L7dpD7Lo",
+      authDomain: "railcctv-6e8a6.firebaseapp.com",
+      projectId: "railcctv-6e8a6",
+      storageBucket: "railcctv-6e8a6.appspot.com",
+      messagingSenderId: "375792566445",
+      appId: "1:375792566445:web:1462d4f7dc1f856cc6c624"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    // 지도 설정
+    const CENTER = [35.8804, 128.6106];
+    const map = L.map('map', { center: CENTER, zoom: 14 });
+    const fireLayer  = L.layerGroup().addTo(map);
+    const crowdLayer = L.layerGroup().addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    // 아이콘
+    const fireIcon = L.icon({
+      iconUrl: 'https://em-content.zobj.net/thumbs/240/apple/354/fire_1f525.png',
+      iconSize: [50, 50], iconAnchor: [25, 50]
+    });
+
+    // DOM
+    const eventListDiv = document.getElementById("eventList");
+    const crowdText = document.getElementById("crowdText");
+    const crowdBadge = document.getElementById("crowdBadge");
+    const $container = document.getElementById("container");
+    const $alert = document.getElementById("alertView");
+    const $dismiss = document.getElementById("dismissBtn");
+
+    // 유틸 함수
+    function parseAnyTime(v) {
+      if (!v) return null;
+      if (v.toDate) return v.toDate();
+      if (typeof v === 'string') {
+        const d = new Date(v);
+        return isNaN(d) ? null : d;
+      }
+      return null;
+    }
+    function fmtKST(v) {
+      const d = parseAnyTime(v);
+      if (d) return d.toLocaleString('ko-KR');
+      if (typeof v === 'string') return v; // 문자열 그대로 표시
+      return "-";
+    }
+    function minutesFromNow(dt) {
+      const d = parseAnyTime(dt);
+      if (!d) return Infinity;
+      return (Date.now() - d.getTime()) / 60000;
+    }
+
+    function speakKo(text) {
+      const u = new SpeechSynthesisUtterance(text);
+      const vs = speechSynthesis.getVoices();
+      const ko = vs.find(v => v.lang && v.lang.startsWith("ko"));
+      if (ko) u.voice = ko;
+      u.lang = "ko-KR";
+      try { speechSynthesis.cancel(); } catch(e) {}
+      speechSynthesis.speak(u);
+    }
+    function playBeep(ms=700, hz=880) {
+      try{
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new Ctx();
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = "sine"; o.frequency.value = hz;
+        o.connect(g); g.connect(ctx.destination);
+        g.gain.setValueAtTime(0.001, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + 0.03);
+        o.start();
+        setTimeout(()=>{ g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.05); o.stop(ctx.currentTime+0.06); ctx.close(); }, ms);
+      }catch(e){}
+    }
+
+    // 🚮 무단투기 알림
+    let __dumpTimer = null;
+    function showDumpAlert(ev, opts = {}) {
+      const { holdMs = 20000, say = true, beep = true } = opts;
+      $alert.style.display = "flex"; $container.style.display = "none";
+
+      if (beep) playBeep();
+      if (say) speakKo("무단투기가 감지되었습니다. 무단투기 시 과태료가 부과됩니다.");
+
+      clearTimeout(__dumpTimer);
+      __dumpTimer = setTimeout(showMain, holdMs);
+    }
+    function showMain(){ $alert.style.display="none"; $container.style.display="flex"; try{speechSynthesis.cancel();}catch(e){} }
+    $dismiss.addEventListener('click', showMain);
+
+    // 🚮 무단투기 Firestore 구독
+    let lastDumpId=null;
+    db.collection("illegal_dumps").orderBy("detected_at","desc").limit(1).onSnapshot(snap=>{
+      if(snap.empty) return;
+      const doc=snap.docs[0]; if(doc.id===lastDumpId) return;
+      lastDumpId=doc.id;
+      const ev=doc.data();
+      if(minutesFromNow(ev.detected_at)<=5){ showDumpAlert(ev); }
+    });
+
+    // 🔥 화재 Firestore 구독 (마커 + 리스트 + 음성/삐소리)
+    let lastFireId=null;
+    db.collection("alerts").orderBy("timestamp","desc").limit(5).onSnapshot(snap=>{
+      if(snap.empty) return;
+      eventListDiv.innerHTML = ""; // 리스트 초기화
+
+      snap.forEach(doc=>{
+        const ev=doc.data(); const title=ev.title||"알림";
+        const timeStr=fmtKST(ev.timestamp);
+        const location=ev.location_name||"위치정보 없음";
+
+        // 리스트에 추가
+        const div=document.createElement("div");
+        div.className="event";
+        div.innerHTML=`
+          <div>🕒 ${timeStr}</div>
+          <div>📍 ${location}</div>
+          <div>🚨 ${title}</div>
+        `;
+        eventListDiv.appendChild(div);
+
+        // 최신 화재 이벤트일 경우 → 마커 + 음성
+        if(doc.id!==lastFireId &&
+          (title.includes("화재")||title.toLowerCase().includes("fire")) &&
+          minutesFromNow(ev.timestamp)<=5){
+
+          lastFireId=doc.id;
+          if (typeof ev.lat==="number" && typeof ev.lng==="number"){
+            L.marker([ev.lat, ev.lng], { icon: fireIcon })
+              .addTo(fireLayer)
+              .bindPopup(`<b>${title}</b><br>📍 ${location}<br>🕒 ${timeStr}`);
+          }
+          speakKo("화재가 발생하였습니다. 근처에 있는 주민들은 대피하시기 바랍니다.");
+          playBeep();
+        }
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🚨 관리자 알림 전송</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background-color: #f9f9f9; }
+    h1 { color: #333; }
+    input, textarea { width: 100%; max-width: 500px; padding: 10px; margin-top: 8px; border-radius: 6px; border: 1px solid #ccc; font-size: 16px; }
+    textarea { height: 200px; }
+    button { padding: 12px 20px; margin-top: 15px; cursor: pointer; border: none; background-color: #007bff; color: white; border-radius: 6px; font-size: 16px; }
+    button:hover { background-color: #0056b3; }
+    #status { margin-top: 15px; font-weight: bold; }
+    .success { color: green; }
+    .error { color: red; }
+    .card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px; max-width: 520px; }
+  </style>
+</head>
+<body>
+  <h1>🚨 관리자 알림 전송</h1>
+
+  <div class="card">
+    <label for="title">알림 제목:</label><br>
+    <input type="text" id="title" placeholder="예: 화재 발생"><br><br>
+    
+    <label for="body">알림 내용:</label><br>
+    <textarea id="body" placeholder="예: OO지역에서 화재 발생, 빠른 대피 바랍니다."></textarea><br><br>
+
+    <label for="locationName">위치명:</label><br>
+    <input type="text" id="locationName" placeholder="예: 경북대 정문"><br><br>
+
+    <label for="lat">위도:</label><br>
+    <input type="text" id="lat" placeholder="예: 35.88535"><br><br>
+
+    <label for="lng">경도:</label><br>
+    <input type="text" id="lng" placeholder="예: 128.6146"><br><br>
+
+    <button id="sendButton">알림 보내기</button>
+    <p id="status"></p>
+  </div>
+
+  <script type="module" src="index.js"></script>
+</body>
+</html>
