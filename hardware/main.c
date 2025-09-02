@@ -31,8 +31,6 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
-
-
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -60,7 +58,7 @@
 #define PWM_MAX  2000
 #define PWM_STEP 250
 
-#define TIM2 htim2
+//#define TIM2 htim2
 #define TIM2_CH TIM_CHANNEL_1
 #define PWM_PERIOD         1000u
 
@@ -70,7 +68,6 @@ volatile uint32_t pwm_pulse_count = 0;
 static const uint16_t duty_table[] = { 300, 600, 900 };
 static uint8_t duty_idx = 0;
 
-
 //btn interrupt
 #define USER_BTN_PORT      GPIOC
 #define USER_BTN_PIN       GPIO_PIN_13
@@ -79,7 +76,6 @@ static uint8_t duty_idx = 0;
 // NUCLEO B1(파란 버튼): 풀다운, 눌렀을 때 High
 #define NUCLEO_B1_ACTIVE_HIGH 1
 volatile uint8_t user_btn_pressed = 0;
-
 
 /* USER CODE END PD */
 
@@ -97,8 +93,9 @@ uint8_t stop[] = "stop";
 uint8_t newline[] = "\n";
 uint8_t forward[] = "F";
 uint8_t backward[] = "R";
-uint8_t dd = 0;
-uint8_t rr = 0;
+uint8_t dd = 3;
+uint8_t rr = 3;
+uint16_t servo = 500;
 
 
 
@@ -118,7 +115,7 @@ uint32_t servo_current_duty = SERVO_MIN_DUTY_CYCLE; // Current servo duty cycle
 uint32_t servo_last_move_time = 0; // Last time servo moved
 #define SERVO_MOVE_INTERVAL_MS 50 // Interval to move servo (ms)
 uint32_t period = 0;
-
+uint32_t dclv = 0;
 
 /* USER CODE END PV */
 
@@ -128,12 +125,12 @@ void SystemClock_Config(void);
 
 // DC motor control function prototypes (only forward and stop are used)
 void DC_Motor_Forward(void);
-void DC_Motor_Backward(void);
+void DC_Motor_Repeat(void);
 void DC_Motor_Stop(void);
 
 // Servo motor control function prototype
-void Set_Servo_Angle(int angle); // -90 to 90 degrees
 
+void Set_Servo_Angle(void);
 
 //static void MX_GPIO_Init(void);
 //static void MX_TIM4_Init(void);
@@ -143,9 +140,6 @@ void Set_Servo_Angle(int angle); // -90 to 90 degrees
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-
-
-
 #include "tim.h"
 #include <stdint.h>
 
@@ -153,41 +147,6 @@ void Set_Servo_Angle(int angle); // -90 to 90 degrees
 #define SERVO_MAX_US   2000   // 180도 근처(필요시 2400~2500으로 조정)
 #define SERVO_PERIOD_US 20000 // 50Hz
 #define TICK_US          1    // 타이머 1카운트 = 1us (PSC로 맞춤)
-
-static inline void servo_write_pulse_us(TIM_HandleTypeDef *htim, uint32_t ch, uint16_t us)
-{
-    if (us < SERVO_MIN_US) us = SERVO_MIN_US;
-    if (us > SERVO_MAX_US) us = SERVO_MAX_US;
-    __HAL_TIM_SET_COMPARE(htim, ch, (uint32_t)(us / (float)TICK_US + 0.5f));
-}
-
-static inline void servo_write_deg(TIM_HandleTypeDef *htim, uint32_t ch, float deg)
-{
-    if (deg < 0)   deg = 0;
-    if (deg > 180) deg = 180;
-    float us = SERVO_MIN_US + (SERVO_MAX_US - SERVO_MIN_US) * (deg / 180.0f);
-    servo_write_pulse_us(htim, ch, (uint16_t)us);
-}
-
-void servo_demo(void)
-{
-    // PWM 시작 (CubeMX에서 TIMx 채널을 PWM Generation으로 설정해 둔 상태)
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-
-    // 주기적으로 각도 스윕: 0→180→0 (각 스텝 간 50ms)
-    while (1) {
-        for (int a = 0; a <= 180; a += 5) {
-            servo_write_deg(&htim2, TIM_CHANNEL_1, (float)a);
-            HAL_Delay(500);
-        }
-        for (int a = 180; a >= 0; a -= 5) {
-            servo_write_deg(&htim2, TIM_CHANNEL_1, (float)a);
-            HAL_Delay(500);
-        }
-    }
-}
-
-
 
 
 
@@ -237,7 +196,6 @@ int main(void)
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
   period = __HAL_TIM_GET_AUTORELOAD(&htim4);
 
-
   // Set initial servo angle (0 degrees)
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CENTER_DUTY_CYCLE);
 
@@ -251,8 +209,8 @@ int main(void)
   // Initial DC motor state: move forward immediately upon start
   DC_Motor_Forward();
 
-  HAL_TIM_PWM_Start_IT(&TIM2, TIM2_CH);
-
+//  HAL_TIM_PWM_Start_IT(&TIM2, TIM2_CH);
+  TIM2->CCR1 = 500;
   //btn interrupt
   /* LED: PA5 출력 */
   __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -280,11 +238,6 @@ int main(void)
   HAL_NVIC_SetPriority(USER_BTN_EXTI_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(USER_BTN_EXTI_IRQn);
 
-
-
-
-
-
   HAL_UART_Transmit(&huart6, (uint8_t*)"BOOT\r\n", 6, 100);
   /* USER CODE END 2 */
 
@@ -293,25 +246,11 @@ int main(void)
   while (1)
   {
 
-     __HAL_TIM_SET_COMPARE(&TIM2, TIM2_CH, 500);
-   //  TIM2->CCR2=500;
-     HAL_Delay(2000);
-     __HAL_TIM_SET_COMPARE(&TIM2, TIM2_CH, 1250);
-     HAL_Delay(1500);
-     __HAL_TIM_SET_COMPARE(&TIM2, TIM2_CH, 900);
-   //  TIM2->CCR2=500;
-     HAL_Delay(1500);
-
-
-
-     __HAL_TIM_SET_COMPARE(&TIM2, TIM2_CH, 2500);
-     HAL_Delay(5000);
-
-
+	   Set_Servo_Angle();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
+     LED();
     // 1. UART communication handling (receive 'warning' from Jetson Nano)
     if (uart_rx_flag == 1)
     {
@@ -326,64 +265,62 @@ int main(void)
         if (strcmp(received_string, "1\n") == 0)
         {
            HAL_UART_Transmit(&huart6, &stop, 4, 1000);
-            HAL_UART_Transmit(&huart6, &newline, 1, 1000);
-            DC_Motor_Stop();
-            dd=0;
-            rr=0;
+           HAL_UART_Transmit(&huart6, &newline, 1, 1000);
+           DC_Motor_Stop();
+           dd=0;
+           rr=0;
+           HAL_Delay(10000);
         }
-
         else if (strcmp(received_string, "forward\n") == 0)
         {
            HAL_UART_Transmit(&huart6, &forward, 1, 1000);
-            HAL_UART_Transmit(&huart6, &newline, 1, 1000);
-            DC_Motor_Forward();
-
-        }
-        else if (strcmp(received_string, "f\n") == 0)
-        {
-           if(rr==0 && dd<3) dd++;
-           else if (rr>0)rr--;
-           HAL_UART_Transmit(&huart6, &forward, 1, 1000);
-            HAL_UART_Transmit(&huart6, &newline, 1, 1000);
-            DC_Motor_Forward();
+           HAL_UART_Transmit(&huart6, &newline, 1, 1000);
+           DC_Motor_Forward();
 
         }
         else if (strcmp(received_string, "backward\n") == 0)
         {
            HAL_UART_Transmit(&huart6, &backward, 1, 1000);
-            HAL_UART_Transmit(&huart6, &newline, 1, 1000);
-            DC_Motor_Forward();
+           HAL_UART_Transmit(&huart6, &newline, 1, 1000);
+           DC_Motor_Forward();
         }
-        else if (strcmp(received_string, "b\n") == 0)
+        else if (strcmp(received_string, "w\n") == 0)
+        {
+           if(rr==0 && dd<3) dd++;
+           else if (rr>0)rr--;
+           if (dd==1) dd++;
+           HAL_UART_Transmit(&huart6, &forward, 1, 1000);
+           HAL_UART_Transmit(&huart6, &newline, 1, 1000);
+           DC_Motor_Forward();
+
+        }
+        else if (strcmp(received_string, "s\n") == 0)
         {
            if(dd==0 && rr<3) rr++;
            else if (dd>0) dd--;
+           if (dd==1) rr++;
            HAL_UART_Transmit(&huart6, &backward, 1, 1000);
-            HAL_UART_Transmit(&huart6, &newline, 1, 1000);
-            DC_Motor_Forward();
+           HAL_UART_Transmit(&huart6, &newline, 1, 1000);
+           DC_Motor_Forward();
+        }
+        else if (strcmp(received_string, "a\n") == 0 && servo>=550)
+        {
+        	servo-=100;
+        	TIM2->CCR2=servo;
+        }
+        else if (strcmp(received_string, "d\n") == 0 && servo<=2450)
+        {
+        	servo+=100;
+        	TIM2->CCR2=servo;
         }
         else if (strcmp(received_string, "asdf\n") == 0)
         {
-
-
            HAL_UART_Transmit(&huart6, &backward, 1, 1000);
-            HAL_UART_Transmit(&huart6, &newline, 1, 1000);
-            DC_Motor_Backward();
+           HAL_UART_Transmit(&huart6, &newline, 1, 1000);
+           DC_Motor_Repeat();
         }
 
-        if (strcmp(received_string, "a\n") == 0)
-        {
-           HAL_UART_Transmit(&huart6, &stop, 4, 1000);
-            HAL_UART_Transmit(&huart6, &newline, 1, 1000);
-            DC_Motor_Stop();
-        }
 
-        if (strcmp(received_string, "d\n") == 0)
-        {
-           HAL_UART_Transmit(&huart6, &stop, 4, 1000);
-            HAL_UART_Transmit(&huart6, &newline, 1, 1000);
-            DC_Motor_Stop();
-        }
 
         // Re-enable interrupt for next reception
 
@@ -391,60 +328,10 @@ int main(void)
         memset(received_string, 0, sizeof(received_string)); // Clear reception buffer
     }
 
-
-/*
-    // 3. Servo motor control (repeated movement from -90 to 90 degrees)
-    // Servo motor continues to operate regardless of DC motor stop status
-    if (HAL_GetTick() - servo_last_move_time >= SERVO_MOVE_INTERVAL_MS)
-    {
-        servo_last_move_time = HAL_GetTick(); // Update time
-
-        if (servo_direction == 1) // Increasing direction
-        {
-            servo_current_duty += 10; // Increase duty cycle (adjustable)
-            if (servo_current_duty >= SERVO_MAX_DUTY_CYCLE)
-            {
-                servo_current_duty = SERVO_MAX_DUTY_CYCLE;
-                servo_direction = -1; // Change direction
-            }
-        }
-        else // Decreasing direction
-        {
-            servo_current_duty -= 10; // Decrease duty cycle (adjustable)
-            if (servo_current_duty <= SERVO_MIN_DUTY_CYCLE)
-            {
-                servo_current_duty = SERVO_MIN_DUTY_CYCLE;
-                servo_direction = 1; // Change direction
-            }
-        }
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, servo_current_duty);
-    }
-*/
-
-    // 4. Light sensor and LED control
-    uint32_t adc_value = HAL_ADC_GetValue(&hadc1); // Read ADC value
-
-    if (adc_value < LIGHT_THRESHOLD_LOW) // If dark, turn on LED
-    {
-        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET); // LED ON
-    }
-    else if (adc_value > LIGHT_THRESHOLD_HIGH) // If bright, turn off LED
-    {
-        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET); // LED OFF
-    }
-    // For intermediate brightness, maintain current state (hysteresis to prevent flickering)
-
-
     // Short delay (adjust as needed)
     HAL_Delay(10);
 
   }
-
-
-
-
-
-
 
   /* USER CODE END 3 */
 }
@@ -496,6 +383,20 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
+void LED(){
+      HAL_ADC_Start(&hadc1);
+      uint32_t adc_val = HAL_ADC_GetValue(&hadc1);
+      //LED켜기
+      if (adc_val < 1450){
+         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, GPIO_PIN_RESET);
+      }
+      else if(adc_val > 1550){
+         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, GPIO_PIN_SET);
+      }
+      else
+         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, GPIO_PIN_SET);
+}
+
 // DC motor control functions
 void DC_Motor_Forward(void) {
      HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
@@ -504,17 +405,25 @@ void DC_Motor_Forward(void) {
    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, period*rr/3);
 }
 
-void DC_Motor_Backward(void) {
-     HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
-     HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
-     while(1){
-     __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, period);
-     __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 0);
-     HAL_Delay(5000);
-     __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
-     __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, period);
-     HAL_Delay(5000);
-     }
+void DC_Motor_Repeat(void) {
+    if (dclv<1500){
+  	  dd=0;
+  	  rr=2;
+  	  dclv++;
+  	DC_Motor_Forward();
+    }
+    else if(dclv<3000){
+  	   dd=2;
+  	   rr=0;
+  	   dclv++;
+  	   DC_Motor_Forward();
+    }
+    else if(dclv==3000){
+  	   dd=0;
+  	   rr=0;
+  	   dclv=0;
+  	 DC_Motor_Forward();
+    }
 }
 
 void DC_Motor_Stop(void) {
@@ -537,36 +446,49 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
         HAL_Delay(10);
         user_btn_pressed = 1;
 
-          if (dd==0)
-              dd=3;
-           else if(dd==5) dd=0;
-           else  dd++;
+          if (dclv==0){
+        	  dd=2;
+        	  rr=0;
+        	  dclv+=2000;
+          }
 
+           else if(dclv==2000) {
+        	   dd=3;
+        	   rr=0;
+        	   dclv+=2000;
+           }
+           else if(dclv==4000){
+        	   dd=0;
+        	   rr=2;
+        	   dclv+=2000;
+           }
+           else if(dclv==6000){
+        	   dd=0;
+        	   rr=3;
+        	   dclv+=2000;
+           }
+           else if(dclv==8000){
+        	   dd=0;
+        	   rr=0;
+        	   dclv=0;
+           }
+   //       if (dd==1) dd++;
+    //      if(rr==1) rr++;
        }
     DC_Motor_Forward();
 
 }
 
-
-
-
 // Set servo motor angle
 // angle: -90 to 90 degrees
-void Set_Servo_Angle(int angle) {
-    // Convert angle range to 0-180 degrees (easier for servo pulse width calculation)
-    int normalized_angle = angle + 90; // -90 -> 0, 0 -> 90, 90 -> 180
-
-    // Calculate pulse width (0.5ms ~ 2.5ms)
-    // 0.5ms (0 degrees) + (2.0ms / 180 degrees) * normalized_angle
-    float pulse_us = SERVO_MIN_PULSE_US + ((float)(SERVO_MAX_PULSE_US - SERVO_MIN_PULSE_US) / 180.0f) * normalized_angle;
-
-    // Convert to duty cycle
-    uint32_t duty_cycle = (uint32_t)(pulse_us / 20000.0f * 20000.0f);
-
-    // Set PWM duty cycle
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, duty_cycle);
+void Set_Servo_Angle(void) {
+	TIM2->CCR1=servo;
+	  servo+=2;
+	  if(servo==2500){
+		  servo=500;
+		  HAL_Delay(50);
+	  }
 }
-
 
 // UART reception complete callback function (called when interrupt occurs)
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
